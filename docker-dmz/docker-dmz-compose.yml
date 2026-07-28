@@ -1,0 +1,133 @@
+services:
+  db:
+    image: alpine
+    container_name: db
+    cap_add: [NET_ADMIN]
+    # nc -l gestisce UNA sola connessione e poi esce -- se fosse lui il PID 1
+    # (il processo principale del container), dopo il primo test il container
+    # si fermerebbe da solo. sleep infinity resta il PID 1, nc gira in loop
+    # sullo sfondo e riparte ad ascoltare dopo ogni connessione.
+    command: >
+      sh -c "
+      apk add --no-cache netcat-openbsd iproute2 &&
+      ip route add 10.22.0.0/24 via 10.23.0.2 &&
+      (while true; do nc -l -p 3306 >> /tmp/received.log 2>&1; done) &
+      sleep infinity
+      "
+    networks:
+      net_lan:
+        ipv4_address: 10.23.0.10
+
+  attacker:
+    image: alpine
+    container_name: attacker
+    cap_add: [NET_ADMIN]
+    command: >
+      sh -c "
+      apk add --no-cache netcat-openbsd tcpdump iproute2 &&
+      ip route add 10.21.0.0/24 via 10.20.0.2 &&
+      sleep infinity
+      "
+    networks:
+      net_ext:
+        ipv4_address: 10.20.0.50
+    depends_on: [fw1]
+
+  fw2:
+    image: alpine
+    container_name: fw2
+    cap_add: [NET_ADMIN]
+    sysctls:
+      - net.ipv4.ip_forward=1
+    command: >
+      sh -c "
+      apk add --no-cache iptables iproute2 tcpdump &&
+      iptables -P FORWARD DROP &&
+      iptables -A FORWARD -p tcp --dport 3306 -s 10.22.0.10 -d 10.23.0.10 -j ACCEPT &&
+      iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT &&
+      sleep infinity
+      "
+    networks:
+      net_mgmt:
+        ipv4_address: 10.22.0.2
+      net_lan:
+        ipv4_address: 10.23.0.2
+    depends_on: [db]
+
+  web:
+    image: nginx:stable-alpine
+    container_name: web
+    cap_add: [NET_ADMIN]
+    entrypoint: >
+      sh -c "
+      apk add --no-cache netcat-openbsd iproute2 tcpdump &&
+      ip route add 10.23.0.0/24 via 10.22.0.2 &&
+      exec nginx -g 'daemon off;'
+      "
+    networks:
+      net_dmz:
+        ipv4_address: 10.21.0.12
+      net_mgmt:
+        ipv4_address: 10.22.0.10
+    depends_on: [fw2]
+
+  fw1:
+    image: alpine
+    container_name: fw1
+    cap_add: [NET_ADMIN]
+    sysctls:
+      - net.ipv4.ip_forward=1
+    command: >
+      sh -c "
+      apk add --no-cache iptables iproute2 tcpdump &&
+      iptables -P FORWARD DROP &&
+      iptables -A FORWARD -p tcp --dport 8080 -d 10.21.0.10 -j ACCEPT &&
+      iptables -A FORWARD -p tcp --dport 443  -d 10.21.0.10 -j ACCEPT &&
+      iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT &&
+      sleep infinity
+      "
+    networks:
+      net_ext:
+        ipv4_address: 10.20.0.2
+      net_dmz:
+        ipv4_address: 10.21.0.2
+    depends_on: [web]
+
+  waf:
+    image: owasp/modsecurity-crs:nginx
+    container_name: waf
+    cap_add: [NET_ADMIN]
+    environment:
+      BACKEND: "http://10.21.0.12:80"
+    networks:
+      net_dmz:
+        ipv4_address: 10.21.0.10
+    depends_on: [web, fw1]
+    # ATTENZIONE: questa immagine non ha iproute2 e il suo entrypoint fa gia'
+    # tutto il lavoro di attivazione CRS -- non lo sovrascriviamo con un wrapper
+    # come per web/fw1/fw2. La rotta esplicita verso net_ext (10.20.0.0/24 via
+    # 10.21.0.2) va aggiunta DOPO "docker compose up", da fuori, con nsenter --
+    # e' un'operazione host, non qualcosa che compose (o Dockerfile) puo' esprimere.
+    # Vedi docker-dmz-compose-postup.sh
+
+networks:
+  net_ext:
+    name: net_ext
+    driver: bridge
+    ipam:
+      config: [{subnet: 10.20.0.0/24}]
+  net_dmz:
+    name: net_dmz
+    driver: bridge
+    ipam:
+      config: [{subnet: 10.21.0.0/24}]
+  net_mgmt:
+    name: net_mgmt
+    driver: bridge
+    ipam:
+      config: [{subnet: 10.22.0.0/24}]
+  net_lan:
+    name: net_lan
+    driver: bridge
+    ipam:
+      config: [{subnet: 10.23.0.0/24}]
