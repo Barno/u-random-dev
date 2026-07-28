@@ -378,7 +378,16 @@ pause
 # ── Verifica finale end-to-end ────────────────────────────────────────────────
 fase "Verifica finale"
 
-spiega "Riconferma dei 4 percorsi chiave, con esito verificato (non solo mostrato):"
+spiega "Riconferma dei percorsi chiave (ping matrix + catena completa), con esito verificato (non solo mostrato):"
+
+docker exec web ping -c 2 10.21.0.2 > /dev/null 2>&1
+esito "web -> fw1, stessa net_dmz" $?
+
+docker exec web ping -c 2 10.22.0.2 > /dev/null 2>&1
+esito "web -> fw2, stessa net_mgmt" $?
+
+docker exec db ping -c 2 10.23.0.2 > /dev/null 2>&1
+esito "db -> fw2, stessa net_lan" $?
 
 OUT1=$(docker exec attacker sh -c "printf 'GET / HTTP/1.0\r\nHost: 10.21.0.10\r\n\r\n' | nc -w3 10.21.0.10 8080")
 echo "$OUT1" | grep -q "200 OK"

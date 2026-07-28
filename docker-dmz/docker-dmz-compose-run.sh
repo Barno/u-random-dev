@@ -161,7 +161,15 @@ fi
 step "FASE D -- Verifica end-to-end"
 
 echo ""
-printf "${C_TITLE}Test 1 -- richiesta legittima: attacker -> fw1 -> waf -> web${C_RESET}\n"
+printf "${C_TITLE}Ping matrix -- stessa subnet, deve funzionare${C_RESET}\n"
+docker exec web ping -c 2 10.21.0.2 > /dev/null 2>&1
+esito "web -> fw1, stessa net_dmz" $?
+docker exec web ping -c 2 10.22.0.2 > /dev/null 2>&1
+esito "web -> fw2, stessa net_mgmt" $?
+docker exec db ping -c 2 10.23.0.2 > /dev/null 2>&1
+esito "db -> fw2, stessa net_lan" $?
+
+printf "\n${C_TITLE}Test 1 -- richiesta legittima: attacker -> fw1 -> waf -> web${C_RESET}\n"
 mostra "docker exec attacker sh -c \"printf 'GET / HTTP/1.0\\r\\nHost: 10.21.0.10\\r\\n\\r\\n' | nc -w3 10.21.0.10 8080\""
 pausa
 OUT1=$(docker exec attacker sh -c "printf 'GET / HTTP/1.0\r\nHost: 10.21.0.10\r\n\r\n' | nc -w3 10.21.0.10 8080")
